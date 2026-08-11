@@ -1,0 +1,15 @@
+{
+  "remote_ip": "127.0.0.1",
+  "remote_port": 20000,
+  "local_ip": "0.0.0.0",
+  "local_port": 0,
+  "master_address": 1,
+  "outstation_address": 1024,
+  "polling_interval_ms": 1000,
+  "auto_reconnect": true,
+  "reconnect_delay_ms": 3000,
+  "class_0_enabled": true,
+  "class_1_enabled": true,
+  "class_2_enabled": true,
+  "class_3_enabled": true
+}
