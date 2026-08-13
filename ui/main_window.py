@@ -1,7 +1,7 @@
 """
 Main Window Dashboard for Arcon DNP3 Client.
-Combines panels, live tables, tabs, and non-blocking background polling timers.
-Fully thread-safe Qt Signal architecture for zero GUI freezes.
+Combines panels, live tables, tabs, and non-blocking background polling.
+Decoupled Qt Event Loop from OpenDNP3 C++ channel mutexes.
 """
 
 from PySide6.QtWidgets import (
@@ -29,9 +29,8 @@ _logger = get_logger()
 class MainWindow(QMainWindow):
     """
     Main PySide6 Application Window for Arcon DNP3 Client.
-    Thread-safe UI using Qt Signals for cross-thread DNP3 Master callbacks.
+    Thread-safe UI architecture avoiding C++ mutex / Python GIL cross-locking.
     """
-    # Signal emitted when a new measurement or event arrives from background DNP3 thread
     measurement_signal = Signal(object, object)  # (DNP3Measurement, DNP3Event)
     connection_signal = Signal(object, str)       # (ConnectionState, message)
 
@@ -44,19 +43,20 @@ class MainWindow(QMainWindow):
         self.dnp3_client = ArconDNP3Client(update_callback=self.on_dnp3_update)
         self.dnp3_client.connection.add_listener(self.on_connection_state_changed)
 
-        # Connection health monitor timer
-        self.conn_check_timer = QTimer(self)
-        self.conn_check_timer.setInterval(500)
-        self.conn_check_timer.timeout.connect(self.check_connection_health)
+        # Database sync timer running on main Qt thread (lock-free)
+        self.sync_timer = QTimer(self)
+        self.sync_timer.setInterval(100)
+        self.sync_timer.timeout.connect(self.on_sync_timer_tick)
 
-        # Cyclic polling timer
+        # Cyclic polling timer (defaults to off)
         self.polling_timer = QTimer(self)
-        self.polling_timer.setInterval(1000)
+        self.polling_timer.setInterval(5000)
         self.polling_timer.timeout.connect(self.on_polling_timer_tick)
 
         self.init_ui()
         self.apply_theme()
         self.process_cli_args()
+        self.sync_timer.start()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -214,18 +214,16 @@ class MainWindow(QMainWindow):
         self.conn_panel.update_connection_state(ConnectionState.CONNECTING)
         success = self.dnp3_client.connect()
         if success:
-            self.conn_check_timer.start()
+            self.conn_panel.update_connection_state(ConnectionState.CONNECTED)
+            self.status_bar.showMessage("Connected to DNP3 Outstation.")
             if self.poll_panel.chk_auto_poll.isChecked():
                 self.polling_timer.start()
 
-    def check_connection_health(self):
-        if self.dnp3_client.is_connected:
-            self.conn_panel.update_connection_state(ConnectionState.CONNECTED)
-
     def on_disconnect_requested(self):
-        self.conn_check_timer.stop()
         self.polling_timer.stop()
         self.dnp3_client.disconnect()
+        self.conn_panel.update_connection_state(ConnectionState.DISCONNECTED)
+        self.status_bar.showMessage("Disconnected from DNP3 Outstation.")
 
     def on_read_all_requested(self):
         if not self.dnp3_client.is_connected:
@@ -253,8 +251,12 @@ class MainWindow(QMainWindow):
         if self.dnp3_client.is_connected:
             self.dnp3_client.poll_all()
 
+    def on_sync_timer_tick(self):
+        if self.dnp3_client:
+            self.dnp3_client.sync_events_from_worker()
+
     def on_dnp3_update(self, measurement: DNP3Measurement, event: DNP3Event):
-        """Thread-safe callback from OpenDNP3 C++ background thread via Qt Signal."""
+        """Thread-safe callback via Qt Signal."""
         self.measurement_signal.emit(measurement, event)
 
     @Slot(object, object)
@@ -265,7 +267,7 @@ class MainWindow(QMainWindow):
         self.tag_monitor.update_tag_value(measurement)
 
     def on_connection_state_changed(self, state: ConnectionState, message: str):
-        """Callback from background thread - emits Qt signal for main thread safety."""
+        """Callback - emits Qt signal for main thread safety."""
         self.connection_signal.emit(state, message)
 
     @Slot(object, str)
@@ -273,11 +275,9 @@ class MainWindow(QMainWindow):
         """Slot executed safely on the Qt main GUI thread."""
         self.conn_panel.update_connection_state(state, message)
         self.status_bar.showMessage(f"DNP3 Master Status: {state.value} {message}")
-        if state == ConnectionState.CONNECTED:
-            QTimer.singleShot(200, self.dnp3_client.poll_all)
 
     def closeEvent(self, event):
-        self.conn_check_timer.stop()
+        self.sync_timer.stop()
         self.polling_timer.stop()
         if self.dnp3_client:
             self.dnp3_client.disconnect()

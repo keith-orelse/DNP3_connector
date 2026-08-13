@@ -38,7 +38,9 @@ def run_poc():
 
     print("\nIssuing Class 0 Scan All request...")
     client.poll_all()
-    time.sleep(2.0)
+    for _ in range(40):
+        client.sync_events_from_worker()
+        time.sleep(0.05)
 
     print("\n------------------ MEASUREMENTS ------------------")
     measurements = client.store.get_all()
@@ -47,7 +49,9 @@ def run_poc():
 
     print("\n------------------ EVENTS ------------------")
     print("Waiting 6 seconds for simulator events...")
-    time.sleep(6.0)
+    for _ in range(120):
+        client.sync_events_from_worker()
+        time.sleep(0.05)
 
     events = client.events.get_events()
     for ev in events:
