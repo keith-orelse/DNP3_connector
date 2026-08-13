@@ -14,6 +14,10 @@ a = Analysis(
     ],
     hiddenimports=[
         'pydnp3',
+        'pydnp3.opendnp3',
+        'pydnp3.asiodnp3',
+        'pydnp3.asiopal',
+        'pydnp3.openpal',
         'dnp3_python',
         'dnp3_python.dnp3station',
         'dnp3_python.dnp3station.master_new',
