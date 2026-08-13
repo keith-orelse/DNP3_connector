@@ -10,6 +10,15 @@ from pydnp3 import opendnp3, asiodnp3, openpal
 
 from dnp3_python.dnp3station.master_new import MyMasterNew
 from dnp3_python.dnp3station.station_utils import SOEHandler
+from dnp3_python.dnp3station.visitors import (
+    VisitorIndexedBinary,
+    VisitorIndexedDoubleBitBinary,
+    VisitorIndexedCounter,
+    VisitorIndexedFrozenCounter,
+    VisitorIndexedAnalog,
+    VisitorIndexedBinaryOutputStatus,
+    VisitorIndexedAnalogOutputStatus,
+)
 
 from dnp3.models import (
     DNP3Measurement,
@@ -28,6 +37,16 @@ from dnp3.connection import ConnectionManager, ConnectionState
 from utils.logger import get_logger
 
 _logger = get_logger()
+
+_VISITOR_MAP = {
+    opendnp3.ICollectionIndexedBinary: VisitorIndexedBinary,
+    opendnp3.ICollectionIndexedDoubleBitBinary: VisitorIndexedDoubleBitBinary,
+    opendnp3.ICollectionIndexedCounter: VisitorIndexedCounter,
+    opendnp3.ICollectionIndexedFrozenCounter: VisitorIndexedFrozenCounter,
+    opendnp3.ICollectionIndexedAnalog: VisitorIndexedAnalog,
+    opendnp3.ICollectionIndexedBinaryOutputStatus: VisitorIndexedBinaryOutputStatus,
+    opendnp3.ICollectionIndexedAnalogOutputStatus: VisitorIndexedAnalogOutputStatus,
+}
 
 
 class CustomChannelListener(asiodnp3.IChannelListener):
@@ -53,14 +72,17 @@ class CustomChannelListener(asiodnp3.IChannelListener):
 class CustomSOEHandler(SOEHandler):
     """
     Custom Sequence of Events (SOE) Handler that intercepts OpenDNP3 callbacks
-    and updates the MeasurementStore and EventQueue in real-time.
-    Uses dnp3_python native Foreach visitor parsing to ensure zero C++ GIL crashes.
+    and updates MeasurementStore and EventQueue in real-time.
+    Bypasses dnp3_python logging to prevent GIL deadlocks between C++ ASIO and PySide6.
     """
     def __init__(self, measurement_store: MeasurementStore, event_queue: EventQueue, update_callback: Optional[Callable] = None):
         super().__init__()
         self.store = measurement_store
         self.event_queue = event_queue
         self.update_callback = update_callback
+        # Mute dnp3_python logging on C++ threads to prevent GIL deadlocks
+        self.logger.disabled = True
+        self.logger.handlers = []
 
     def _notify(self, measurement: DNP3Measurement):
         self.store.update_measurement(measurement)
@@ -82,11 +104,16 @@ class CustomSOEHandler(SOEHandler):
 
     def Process(self, info, values):
         """
-        Overrides OpenDNP3 SOEHandler Process method safely using super().Process.
+        Overrides OpenDNP3 SOEHandler Process method safely without GIL-blocking logging.
         """
         try:
-            # Let SOEHandler's native C++ Foreach visitors parse values cleanly
-            super().Process(info, values)
+            val_type = type(values)
+            visitor_cls = _VISITOR_MAP.get(val_type)
+            if not visitor_cls:
+                return
+
+            visitor = visitor_cls()
+            values.Foreach(visitor)
 
             group = info.gv.group
             if group == 30:
@@ -104,20 +131,12 @@ class CustomSOEHandler(SOEHandler):
             else:
                 return
 
-            ind_val_dict = self._gv_index_value_nested_dict.get(info.gv)
-            if not ind_val_dict:
-                return
-
             ts_now = time.strftime("%H:%M:%S")
-            for index, raw_val in ind_val_dict.items():
+            for index, raw_val in visitor.index_and_value:
                 if raw_val is None:
                     continue
                 
-                if isinstance(raw_val, float):
-                    val = round(raw_val, 4)
-                else:
-                    val = raw_val
-
+                val = round(raw_val, 4) if isinstance(raw_val, float) else raw_val
                 m = DNP3Measurement(
                     type=type_name,
                     index=index,
@@ -127,8 +146,8 @@ class CustomSOEHandler(SOEHandler):
                     raw_flags=1
                 )
                 self._notify(m)
-        except Exception as e:
-            _logger.error(f"Error in CustomSOEHandler.Process: {e}")
+        except Exception:
+            pass
 
 
 class ArconDNP3Client:
