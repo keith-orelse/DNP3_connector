@@ -8,12 +8,12 @@ Guarantees 100% telemetry delivery and 0% GUI freezes.
 import os
 import sys
 import time
-import re
 import select
 from multiprocessing import Process, Queue
 from pydnp3 import opendnp3, asiodnp3
 
 from dnp3_python.dnp3station.master_new import MyMasterNew
+from dnp3.normalizer import MeasurementNormalizer
 
 
 class StdoutPipeReader:
@@ -65,6 +65,8 @@ def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
     except Exception:
         pass
 
+    normalizer = MeasurementNormalizer()
+
     try:
         event_queue.put({"type": "STATUS", "state": "CONNECTING", "msg": f"Connecting to {remote_ip}:{remote_port}..."})
 
@@ -87,10 +89,6 @@ def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
 
     initial_scan_done = False
     start_time = time.time()
-
-    # Regex for parsing PrintingSOEHandler lines: [index] : value : quality : flags
-    pattern_val = re.compile(r'^\s*\[(\d+)\]\s*:\s*([^:]+)\s*:\s*(\d+)')
-    current_group = "ANALOG_INPUT"
 
     while True:
         now = time.time()
@@ -125,54 +123,26 @@ def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
         except Exception:
             pass
 
-        # Parse captured C++ stdout stream
+        # Parse captured C++ stdout stream using MeasurementNormalizer
         if pipe_reader:
             try:
                 text = pipe_reader.read_text()
                 if text:
-                    ts_now = time.strftime("%H:%M:%S")
-                    for line in text.splitlines():
-                        line_str = line.strip()
-                        if "Header:" in line_str or "Group" in line_str:
-                            if "Binary" in line_str:
-                                current_group = "BINARY_INPUT"
-                            elif "Analog" in line_str:
-                                current_group = "ANALOG_INPUT"
-                            elif "Counter" in line_str:
-                                current_group = "COUNTER"
-                            continue
-
-                        match = pattern_val.search(line_str)
-                        if match:
-                            idx = int(match.group(1))
-                            raw_v = match.group(2).strip()
-
-                            if raw_v.lower() == "true":
-                                val = True
-                                data_type = "BINARY_INPUT"
-                            elif raw_v.lower() == "false":
-                                val = False
-                                data_type = "BINARY_INPUT"
-                            else:
-                                try:
-                                    if "." in raw_v:
-                                        val = round(float(raw_v), 4)
-                                        data_type = "ANALOG_INPUT"
-                                    else:
-                                        val = int(raw_v)
-                                        data_type = "COUNTER" if val > 500 else current_group
-                                except ValueError:
-                                    val = raw_v
-                                    data_type = current_group
-
-                            event_queue.put({
-                                "type": "MEASUREMENT",
-                                "data_type": data_type,
-                                "index": idx,
-                                "value": val,
-                                "quality": "ONLINE",
-                                "timestamp": ts_now
-                            })
+                    measurements = normalizer.parse_text_stream(text)
+                    for m in measurements:
+                        m_dict = m.to_dict()
+                        event_queue.put({
+                            "type": "MEASUREMENT",
+                            "measurement": m_dict,
+                            "data_type": m.type,
+                            "index": m.index,
+                            "value": m.value,
+                            "quality": m.quality,
+                            "timestamp": m.timestamp,
+                            "raw_flags": m.raw_flags,
+                            "group": m.group,
+                            "variation": m.variation,
+                        })
             except Exception:
                 pass
 

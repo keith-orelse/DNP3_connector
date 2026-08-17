@@ -7,7 +7,7 @@ Guarantees 100% thread safety and zero GIL deadlocks with PySide6.
 import time
 from typing import Callable, Optional
 from dnp3.worker import DNP3ProcessManager
-from dnp3.models import DNP3Measurement
+from dnp3.models import DNP3Measurement, parse_dnp3_timestamp
 from dnp3.events import EventQueue, DNP3Event
 from dnp3.measurements import MeasurementStore
 from dnp3.connection import ConnectionManager, ConnectionState
@@ -106,14 +106,21 @@ class ArconDNP3Client:
             elif etype == "LOG":
                 _logger.info(evt.get("msg", ""))
             elif etype == "MEASUREMENT":
-                m = DNP3Measurement(
-                    type=evt.get("data_type"),
-                    index=evt.get("index"),
-                    value=evt.get("value"),
-                    quality=evt.get("quality", "ONLINE"),
-                    timestamp=evt.get("timestamp", time.strftime("%H:%M:%S")),
-                    raw_flags=1
-                )
+                m_dict = evt.get("measurement")
+                if m_dict and isinstance(m_dict, dict):
+                    m = DNP3Measurement.from_dict(m_dict)
+                else:
+                    m = DNP3Measurement(
+                        type=evt.get("data_type", "analog_input"),
+                        index=evt.get("index", 0),
+                        value=evt.get("value", 0),
+                        quality=evt.get("quality", "ONLINE"),
+                        timestamp=evt.get("timestamp", parse_dnp3_timestamp(None)),
+                        raw_flags=evt.get("raw_flags", 1),
+                        group=evt.get("group"),
+                        variation=evt.get("variation")
+                    )
+
                 self.store.update_measurement(m)
 
                 dnp3_evt = DNP3Event(

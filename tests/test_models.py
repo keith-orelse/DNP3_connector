@@ -19,7 +19,7 @@ def test_measurement_normalization():
         index=0,
         value=230.5,
         quality="ONLINE",
-        timestamp="2026-08-11 12:00:00.000",
+        timestamp="2026-08-11T12:00:00.000Z",
         source="outstation"
     )
     d = m.to_dict()
@@ -48,11 +48,17 @@ def test_parse_dnp3_quality():
     assert "ONLINE" in q_chatter
     assert "CHATTER_FILTER" in q_chatter
 
+    q_restart = parse_dnp3_quality(0x81, TYPE_BINARY_INPUT)
+    assert "ONLINE" in q_restart
+    assert "RESTART" in q_restart
+
 
 def test_parse_dnp3_timestamp():
     ts = parse_dnp3_timestamp(1700000000000)
     assert ts != "N/A"
     assert "2023" in ts
+    assert "T" in ts and "Z" in ts
 
     ts_none = parse_dnp3_timestamp(None)
-    assert ts_none == "N/A"
+    assert ts_none != "N/A"
+    assert "T" in ts_none and "Z" in ts_none
