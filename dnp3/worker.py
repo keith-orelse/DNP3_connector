@@ -14,6 +14,9 @@ from pydnp3 import opendnp3, asiodnp3
 
 from dnp3_python.dnp3station.master_new import MyMasterNew
 from dnp3.normalizer import MeasurementNormalizer
+from utils.logger import get_logger
+
+_logger = get_logger()
 
 
 class StdoutPipeReader:
@@ -34,7 +37,8 @@ class StdoutPipeReader:
                 if not chunk:
                     break
                 data_parts.append(chunk.decode('utf-8', errors='ignore'))
-            except Exception:
+            except Exception as e:
+                _logger.debug(f"Error reading stdout pipe chunk: {e}")
                 break
         return "".join(data_parts)
 
@@ -44,8 +48,8 @@ class StdoutPipeReader:
             os.close(self.old_stdout_fd)
             os.close(self.r_fd)
             os.close(self.w_fd)
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug(f"Error closing stdout pipe reader: {e}")
 
 
 def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
@@ -62,8 +66,8 @@ def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
     pipe_reader = None
     try:
         pipe_reader = StdoutPipeReader()
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.warning(f"Could not initialize StdoutPipeReader: {e}")
 
     normalizer = MeasurementNormalizer()
 
@@ -97,8 +101,9 @@ def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
                 master_app.send_scan_all_request()
                 event_queue.put({"type": "LOG", "msg": "Issued initial Class 0,1,2,3 Integrity Scan"})
                 initial_scan_done = True
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.warning(f"Initial integrity scan failed: {e}")
+                event_queue.put({"type": "LOG", "msg": f"Initial integrity scan failed: {e}"})
 
         # Check command queue from GUI
         try:
@@ -108,8 +113,8 @@ def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
                 if cmd_type == "STOP":
                     try:
                         master_app.shutdown()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _logger.debug(f"Error shutting down master app: {e}")
                     if pipe_reader:
                         pipe_reader.close()
                     event_queue.put({"type": "STATUS", "state": "DISCONNECTED", "msg": "Disconnected"})
@@ -119,9 +124,10 @@ def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
                         master_app.send_scan_all_request()
                         event_queue.put({"type": "LOG", "msg": "Issued Class 0,1,2,3 Integrity Scan"})
                     except Exception as e:
+                        _logger.warning(f"Poll all failed: {e}")
                         event_queue.put({"type": "LOG", "msg": f"Poll failed: {e}"})
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug(f"Error processing command queue: {e}")
 
         # Parse captured C++ stdout stream using MeasurementNormalizer
         if pipe_reader:
@@ -143,8 +149,8 @@ def run_dnp3_worker(cmd_queue: Queue, event_queue: Queue, config: dict):
                             "group": m.group,
                             "variation": m.variation,
                         })
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.warning(f"Error parsing stdout telemetry stream: {e}")
 
         time.sleep(0.05)
 
@@ -177,20 +183,23 @@ class DNP3ProcessManager:
         if self.cmd_queue and self.is_running:
             try:
                 self.cmd_queue.put({"cmd": "STOP"})
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Error putting STOP command to queue: {e}")
         if self.worker_process:
             try:
                 self.worker_process.join(timeout=1.0)
                 if self.worker_process.is_alive():
                     self.worker_process.terminate()
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Error terminating worker process: {e}")
             self.worker_process = None
 
     def send_cmd(self, cmd_dict: dict):
         if self.cmd_queue and self.is_running:
-            self.cmd_queue.put(cmd_dict)
+            try:
+                self.cmd_queue.put(cmd_dict)
+            except Exception as e:
+                _logger.warning(f"Failed to send command to worker: {e}")
 
     def get_events(self) -> list:
         events = []
@@ -198,6 +207,6 @@ class DNP3ProcessManager:
             try:
                 while not self.event_queue.empty():
                     events.append(self.event_queue.get_nowait())
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Error draining event queue: {e}")
         return events

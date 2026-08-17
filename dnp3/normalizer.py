@@ -5,7 +5,7 @@ Ensures zero value-based measurement type guessing.
 """
 
 import re
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 from dnp3.models import (
     DNP3Measurement,
     TYPE_BINARY_INPUT,
@@ -43,12 +43,13 @@ class MeasurementNormalizer:
     """
     Parses OpenDNP3 C++ PrintingSOEHandler output stream line-by-line using DNP3 Group metadata.
     Completely eliminates numerical value-based data type guessing.
+    Does NOT default unknown DNP3 groups to ANALOG_INPUT.
     """
 
     def __init__(self):
-        self.current_group: int = 30
-        self.current_variation: int = 1
-        self.current_data_type: str = TYPE_ANALOG_INPUT
+        self.current_group: Optional[int] = 30
+        self.current_variation: Optional[int] = 1
+        self.current_data_type: Optional[str] = TYPE_ANALOG_INPUT
 
         # Regex patterns for PrintingSOEHandler output
         # Header: Group30Var1, Count: 3, Qualifier: 0x00
@@ -63,6 +64,7 @@ class MeasurementNormalizer:
         """
         Parses a single line of text from PrintingSOEHandler stream.
         Updates internal Group state or returns a normalized DNP3Measurement object.
+        Returns None for unsupported or unknown DNP3 groups.
         """
         line_str = line.strip()
         if not line_str:
@@ -76,7 +78,12 @@ class MeasurementNormalizer:
                 variation = int(h_match.group(2))
                 self.current_group = group
                 self.current_variation = variation
-                self.current_data_type = GROUP_TYPE_MAP.get(group, TYPE_ANALOG_INPUT)
+                mapped_type = GROUP_TYPE_MAP.get(group)
+                if mapped_type is None:
+                    _logger.debug(f"Ignoring unsupported/unmapped DNP3 group {group}Var{variation}")
+                    self.current_data_type = None
+                else:
+                    self.current_data_type = mapped_type
             except Exception as e:
                 _logger.debug(f"Failed to parse header line '{line_str}': {e}")
             return None
@@ -95,6 +102,12 @@ class MeasurementNormalizer:
                 self.current_data_type = TYPE_FROZEN_COUNTER
             elif "Counter" in line_str:
                 self.current_data_type = TYPE_COUNTER
+            else:
+                self.current_data_type = None
+            return None
+
+        # Ignore records if current group is unsupported / unmapped
+        if self.current_data_type is None:
             return None
 
         # Check for point record line

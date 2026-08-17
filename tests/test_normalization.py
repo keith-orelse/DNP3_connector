@@ -97,6 +97,27 @@ Header: Group21Var1
     assert m_fc.value == 5000
 
 
+def test_unsupported_dnp3_group_ignored_safely():
+    """
+    Verifies that unknown/unsupported DNP3 groups (e.g., Group 50 TimeAndInterval or Group 120)
+    are ignored safely without being defaulted to ANALOG_INPUT or throwing exceptions.
+    """
+    normalizer = MeasurementNormalizer()
+    text = """
+Header: Group50Var1
+  [0] : 1700000000 : 1 : 0
+Header: Group120Var1
+  [0] : 9999 : 1 : 0
+Header: Group30Var1
+  [0] : 230.5 : 1 : 0
+"""
+    measurements = normalizer.parse_text_stream(text)
+    assert len(measurements) == 1
+    assert measurements[0].type == TYPE_ANALOG_INPUT
+    assert measurements[0].index == 0
+    assert measurements[0].value == 230.5
+
+
 def test_high_analog_value_remains_analog_input_regression():
     """
     CRITICAL REGRESSION TEST:
@@ -130,19 +151,27 @@ def test_low_counter_value_remains_counter_regression():
     assert m.value == 10
 
 
-def test_quality_bitmask_parsing():
-    # Bit 0 (0x01): ONLINE
+def test_quality_bitmask_parsing_across_data_types():
+    # Analog Input Flags
     assert parse_dnp3_quality(0x01, TYPE_ANALOG_INPUT) == "ONLINE"
-    # Bit 0 (0x00): OFFLINE
     assert parse_dnp3_quality(0x00, TYPE_ANALOG_INPUT) == "OFFLINE"
-    # Bit 0 (0x01) + Bit 1 (0x02): ONLINE | RESTART
-    assert parse_dnp3_quality(0x03, TYPE_ANALOG_INPUT) == "ONLINE | RESTART"
-    # Bit 0 (0x01) + Bit 2 (0x04): ONLINE | COMM_LOST
-    assert parse_dnp3_quality(0x05, TYPE_ANALOG_INPUT) == "ONLINE | COMM_LOST"
-    # Bit 0 (0x01) + Bit 5 (0x20): ONLINE | OVERRANGE (Analog)
     assert parse_dnp3_quality(0x21, TYPE_ANALOG_INPUT) == "ONLINE | OVERRANGE"
-    # Bit 0 (0x01) + Bit 5 (0x20): ONLINE | CHATTER_FILTER (Binary)
+    assert parse_dnp3_quality(0x41, TYPE_ANALOG_INPUT) == "ONLINE | REFERENCE_ERR"
+
+    # Binary Input Flags
     assert parse_dnp3_quality(0x21, TYPE_BINARY_INPUT) == "ONLINE | CHATTER_FILTER"
+    assert parse_dnp3_quality(0x81, TYPE_BINARY_INPUT) == "ONLINE | RESTART"
+
+    # Counter / Frozen Counter Flags
+    assert parse_dnp3_quality(0x21, TYPE_COUNTER) == "ONLINE | ROLLOVER"
+    assert parse_dnp3_quality(0x41, TYPE_COUNTER) == "ONLINE | DISCONTINUITY"
+    assert parse_dnp3_quality(0x21, TYPE_FROZEN_COUNTER) == "ONLINE | ROLLOVER"
+
+    # Binary Output Status Flags
+    assert parse_dnp3_quality(0x05, TYPE_BINARY_OUTPUT_STATUS) == "ONLINE | COMM_LOST"
+
+    # Analog Output Status Flags
+    assert parse_dnp3_quality(0x21, TYPE_ANALOG_OUTPUT_STATUS) == "ONLINE | OVERRANGE"
 
 
 def test_iso_8601_timestamp_parsing():

@@ -46,8 +46,13 @@ class DNP3Measurement:
 
 def parse_dnp3_quality(flags: int, data_type: str = TYPE_ANALOG_INPUT) -> str:
     """
-    Parses OpenDNP3 quality flag bitmask into human-readable strings.
-    Supported flags: ONLINE, OFFLINE, RESTART, COMM_LOST, REMOTE_FORCED, LOCAL_FORCED, CHATTER_FILTER, OVERRANGE, REFERENCE_ERR
+    Parses OpenDNP3 quality flag bitmask into human-readable strings per IEEE 1815 specification.
+    Supported data types:
+      - BINARY_INPUT
+      - ANALOG_INPUT
+      - COUNTER / FROZEN_COUNTER
+      - BINARY_OUTPUT_STATUS
+      - ANALOG_OUTPUT_STATUS
     """
     if flags is None:
         return "UNKNOWN"
@@ -59,14 +64,12 @@ def parse_dnp3_quality(flags: int, data_type: str = TYPE_ANALOG_INPUT) -> str:
 
     qualities = []
 
-    # Common Bitmasks across OpenDNP3 Quality Enums
-    # Bit 0: ONLINE (0x01)
+    # Common Bitmasks across OpenDNP3 Quality Enums (Bit 0 - Bit 4)
+    # Bit 0: ONLINE (0x01) / OFFLINE (0x00)
     # Bit 1 (0x02) or Bit 7 (0x80): RESTART / STATE
     # Bit 2: COMM_LOST (0x04)
     # Bit 3: REMOTE_FORCED (0x08)
     # Bit 4: LOCAL_FORCED (0x10)
-    # Bit 5: OVERRANGE / CHATTER_FILTER / ROLLOVER (0x20)
-    # Bit 6: REFERENCE_ERR (0x40)
 
     if flags & 0x01:
         qualities.append("ONLINE")
@@ -82,14 +85,25 @@ def parse_dnp3_quality(flags: int, data_type: str = TYPE_ANALOG_INPUT) -> str:
     if flags & 0x10:
         qualities.append("LOCAL_FORCED")
 
+    # Type-specific quality flags (Bit 5 and Bit 6)
     if data_type in (TYPE_ANALOG_INPUT, TYPE_ANALOG_OUTPUT_STATUS):
+        # Bit 5 (0x20): OVERRANGE
+        # Bit 6 (0x40): REFERENCE_ERR
         if flags & 0x20:
             qualities.append("OVERRANGE")
         if flags & 0x40:
             qualities.append("REFERENCE_ERR")
     elif data_type == TYPE_BINARY_INPUT:
+        # Bit 5 (0x20): CHATTER_FILTER
         if flags & 0x20:
             qualities.append("CHATTER_FILTER")
+    elif data_type in (TYPE_COUNTER, TYPE_FROZEN_COUNTER):
+        # Bit 5 (0x20): ROLLOVER
+        # Bit 6 (0x40): DISCONTINUITY
+        if flags & 0x20:
+            qualities.append("ROLLOVER")
+        if flags & 0x40:
+            qualities.append("DISCONTINUITY")
 
     return " | ".join(qualities) if qualities else "ONLINE"
 
